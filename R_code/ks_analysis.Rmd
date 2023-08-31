@@ -1,0 +1,449 @@
+---
+title: "kickstarter_analysis"
+author: "Riccardo Sturla"
+date: "2023-08-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load usefull packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(caret)
+library(gridExtra)
+library(grid)
+library(car)
+library(MASS)
+library(glmnet)
+library(bruceR)
+library(rpart)
+library(rpart.plot)
+library(party)
+library(partykit)
+library(randomForest)
+library(lubridate)
+library(ggthemes)
+library(ggcorrplot)
+library(extrafont)
+library(pROC)
+library(cluster)
+library(NbClust)
+```
+
+Load data
+```{r}
+ks_data <- read_csv("ks-projects-201801.csv")
+glimpse(ks_data)
+```
+## Cleaning the dataset
+## Things to do:
+- check NA values and remove them
+- remove useless variables
+- check for inconsistent data
+- eventually create new or better columns
+- encode State variable
+
+```{r}
+summary(ks_data)
+```
+Some NA values and some projects launched in 1970: impossible (Kickstarter was created in 2009.
+It must be an error.
+```{r}
+ks_data[year(ks_data$launched) == 1970, ]
+```
+These projects have also other missing values so we can remove them, together with the ones with no "country" and no "name" value.
+
+```{r}
+ks_clean <- ks_data %>%
+  filter(!(year(launched) %in% c(1970))) %>% 
+  filter(!(country == 'N,0"')) %>% 
+  filter(!is.na(name))
+```
+
+
+We should also remove projects whose "state" is not "successful" or "failed", because they don't give us useful information for our analysis.
+```{r}
+unique(ks_clean$state)
+ks_clean <- ks_clean %>%
+  filter(state %in% c("failed", "successful"))
+```
+
+check if there are other NA values:
+```{r}
+sapply(ks_clean, function(x) sum(is.na(x)))
+```
+before incoming into some errors, we change the type of the categorical variables into factor.
+```{r}
+ks_clean <- ks_clean %>%
+  mutate(category = factor(category),
+         main_category = factor(main_category),
+         currency = factor(currency),
+         state = factor(state),
+         country = factor(country))
+```
+```{r}
+ks_clean$launched <- as.Date(ks_clean$launched, format="%Y/%m/%d")
+```
+
+
+we remove redundant columns for the pledged amount, keeping only usd_pledged_real because it is already converted to USD.
+Also "goal" becomes useless because it is already defined by "usd_goal"
+```{r}
+ks_clean <- ks_clean %>%
+  dplyr::select(- c(pledged, goal, `usd pledged`, currency))
+```
+
+Moreover we could create two columns with only the year and the month in which a project is launched and not the entire date, because it could be more useful in future analysis.
+```{r}
+ks_clean <- ks_clean %>%
+mutate(launch_year = year(launched)) %>%
+  mutate(launched = date(launched)) %>%
+mutate(launch_month = month(launched))
+```
+
+Finally we can encode the state of the project into a binary variable and remove the previous column.
+```{r}
+ks_clean <- ks_clean %>%
+  mutate(state_bi = factor(ifelse(state == "successful", 1, 0))) %>%
+  dplyr::select(- c(state))
+```
+
+Compute the duration (in days) of a project: it's a more useful information to have
+```{r}
+ks_clean <- ks_clean %>%
+  mutate(duration = as.numeric(deadline - launched))
+```
+
+Scaling
+```{r}
+ks_cleann <- ks_clean
+ks_cleann$usd_goal_real <- scaler(ks_cleann$usd_goal_real, min=0, max=1)
+```
+```{r}
+ks_cleann$usd_pledged_real <- scaler(ks_cleann$usd_pledged_real, min=0, max=1)
+```
+
+See boxplots of non categorical variables
+```{r}
+ks_cleann %>% dplyr::select(-name,-ID,-category,-main_category,-deadline,-launched, -launch_year, -launch_month, -state_bi, -country) %>% gather() %>% 
+  ggplot(aes(value)) + 
+    geom_boxplot(fill="skyblue", color="black", outlier.colour = "deepskyblue") + 
+    facet_wrap(~key, scales = 'free')+
+  theme_minimal()
+```
+There are a few outliers: let's manually remove them. They are just a couple of observation so there's no problem in removing them.
+```{r}
+ks_cleann <- ks_cleann %>%
+  filter(!(backers > 150000))%>%
+  filter(!(usd_goal_real > 0.75))
+```
+
+Let's plot again
+```{r}
+ks_cleann %>% dplyr::select(-name,-ID,-category,-main_category,-deadline,-launched, -launch_year, -launch_month, -state_bi, -country) %>% gather() %>% 
+  ggplot(aes(value)) + 
+    geom_boxplot(fill="skyblue", color="black", outlier.colour = "deepskyblue") + 
+    facet_wrap(~key, scales = 'free')+
+  theme_minimal()
+```
+Plot the correlation between numerical variables
+```{r}
+ks_cleann %>% dplyr::select(-name,-ID,-category,-main_category,-deadline,-launched, -launch_year, -launch_month, -state_bi, -country) %>% cor() %>% melt() %>%
+  ggplot(aes(x=Var1, y=Var2, fill=value)) + 
+    geom_tile() +
+    geom_text(aes(Var1, Var2, label = round(value, 2)), size = 3, color="black") +
+      scale_fill_gradient2(low = "lightblue", high = "navy",
+                         limit = c(-1,1), name="Correlation") +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), 
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.background = element_blank())
+```
+As expected the amount pledged is highly correlated with the number of backers. Surely we will consider only one of the two in our analysis.
+
+```{r}
+ks_clean <- ks_clean %>% 
+  filter(!(backers > 150000))%>%
+  filter(!(usd_goal_real > 150000000 ))
+```
+
+Let's now see some plots to better understand and visualize the data.
+```{r}
+kickstarter_category_goal <- ks_clean %>%
+  group_by(main_category) %>%
+  summarise(avg_goal = mean(usd_goal_real))
+```
+
+```{r}
+kickstarter_category_goal %>%
+  ggplot(aes(x= avg_goal, y = reorder(main_category, avg_goal), fill = main_category)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0,0)) +
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text(family = "Rubik"), legend.position="none") +
+  labs(
+    x     = "Average Goal", 
+    y     = "Category",
+    title = "Average Goal for Category")
+```
+These are the categories with the highest average goals. Let's now see the success rate for every category.
+
+```{r}
+kickstarter_category <- ks_data %>%
+  group_by(main_category, state) %>%
+  summarise(count = n()) %>%
+  mutate(perc = round((count/sum(count))*100,2))%>%
+  filter(state == "successful")
+```
+
+```{r}
+kickstarter_category %>%
+  ggplot(aes(x = reorder(main_category, perc), y = perc, fill = main_category))+
+  geom_col() +
+  theme_fivethirtyeight() +
+  theme(
+    axis.title = element_text(family = "Rubik"),
+      legend.position="none",
+    axis.text.x  = element_text(
+      family = "Rubrik", 
+      angle = 90, 
+      hjust = 1, 
+      vjust = 0.5)) +
+  labs(
+    y     = "Success Rate (%)", 
+    x     = "Category",
+    title = "Success Rate for Category" 
+  )
+  
+```
+
+As expected, categories with higher goals have lower success rate. The goal amount is logically a determinant variable for success.
+
+```{r}
+ks_clean %>%
+  group_by(country, state_bi) %>%
+  summarise(count = n()) %>%
+  mutate(perc = round((count/sum(count))*100,2)) %>%
+  filter(state_bi == "1") %>%
+  ggplot(aes(y= reorder(country, perc), x = perc, fill = country)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0,0)) +
+  theme_fivethirtyeight() +
+  theme(axis.title = element_text(family = "Rubik"), legend.position="none") +
+  labs(
+    x     = "Success Rate (%)", 
+    y     = "Country",
+    title = "Success Rates for Country")
+```
+Some countries have significantly higher success rate. The country in which you choose to launch your project could me a relevant factor for success.
+
+
+## Supervised learning
+
+Let's split the dataset in training test and test set (0.7/0.3)
+```{r}
+set.seed(777)
+
+sample <- sample(c(TRUE, FALSE), nrow(ks_clean), replace=TRUE, prob=c(0.7,0.3))
+ks_train  <- ks_clean[sample, ]
+ks_test   <- ks_clean[!sample, ]
+```
+
+The most suitable model for classification is the logistic regression. But how does it perform with our data?
+
+Logistic regression
+```{r}
+log_model <- glm(state_bi ~ main_category + usd_goal_real + duration + launch_year + launch_month + country + backers, family = "binomial", data = ks_train)
+summary(log_model)
+```
+```{r}
+pred1 <- predict(log_model,ks_test, type = "response")
+pred2 <-predict(log_model,ks_train, type = "response")
+```
+Confusion matrix and accuracy
+```{r}
+c_matrix <- table(Actual_Value = ks_train$state_bi, Predicted_Value = pred2 >0.5)
+c_matrix          
+(c_matrix[[1,1]] + c_matrix[[2,2]])/ sum(c_matrix)
+```
+```{r}
+test_roc = roc(ks_test$state_bi ~ pred1, plot = TRUE, print.auc = TRUE)
+```
+
+The logistic model has an accuracy of 0.90. However an important consideration about "backers" must be done. Looking at the coefficients, but also just thinking about it, the numbers of backers is a key factor of the success of a project, but it is also something that we don't know before launching our crowdfunding.
+So, in order to predict if a hypothetical project would success, we should try to run a model without the "backers" variable and see how the performance changes. 
+
+```{r}
+log_model_b <- glm(state_bi ~ main_category + usd_goal_real + duration + launch_year + launch_month + country, family = "binomial", data = ks_train)
+summary(log_model_b)
+```
+
+```{r}
+pred3 <- predict(log_model_b,ks_test, type = "response")
+pred4 <-predict(log_model_b,ks_train, type = "response")
+c_matrix <- table(Actual_Value = ks_train$state_bi, Predicted_Value = pred4 >0.5)
+c_matrix          
+(c_matrix[[1,1]] + c_matrix[[2,2]])/ sum(c_matrix)
+```
+Now the accuracy is 0.65, much less than before but still acceptable. That shows how relevant the number of backers was.
+
+For computational reasons, let's create a reduced dataset of 10k observations and split it in training and validation sets.
+
+```{r}
+ks_redu <- ks_clean[sample(nrow(ks_clean), 10000), ]
+ks_redu <- ks_redu %>%
+  dplyr::select(- c(ID, name,category,deadline,launched, usd_pledged_real))
+set.seed(777)
+
+sample <- sample(c(TRUE, FALSE), nrow(ks_redu), replace=TRUE, prob=c(0.7,0.3))
+ksr_train  <- ks_redu[sample, ]
+ksr_test   <- ks_redu[!sample, ]
+```
+
+Lasso
+```{r}
+y_train=ksr_train$state_bi
+ksr_trainx <- ksr_train %>%
+  dplyr::select(-c(state_bi))
+x_train=model.matrix( ~ ., ksr_trainx[,])
+cv.lasso=cv.glmnet(x_train,y_train,alpha=1,family="binomial")
+plot(cv.lasso)
+print(cv.lasso$lambda.min)
+```
+Best lambda
+```{r}
+lasso=glmnet(x_train,y_train,alpha=1,family="binomial",lambda=cv.lasso$lambda.min)
+coef(lasso)
+```
+Accuracy
+```{r}
+ksr_testx <- ksr_test %>%
+  dplyr::select(-c(state_bi))
+x_test=model.matrix( ~ .,ksr_testx[,])
+lasso_prob=predict(lasso,x_test,type='response')
+lasso_pred=ifelse(lasso_prob>0.5,1,0)
+lasso_cm=confusionMatrix(as.factor(lasso_pred),as.factor(ksr_test$state_bi),positive='1')
+print(lasso_cm)
+```
+
+Tree
+```{r}
+large_tree=rpart(state_bi~., data=ksr_train, method="class", model=TRUE)
+cp=which.min(large_tree$cptable[, "xerror"]) %>% large_tree$cptable[., "CP"]
+print(large_tree$cptable)
+tree=prune(large_tree,cp=cp)
+rpart.plot(tree)
+```
+
+```{r}
+tree_pred=predict(tree, ksr_test, type='class')
+tree_cm=confusionMatrix(as.factor(tree_pred),as.factor(ksr_test$state_bi),positive='1')
+tree_cm
+```
+```{r}
+ksr_test_b <- ksr_test %>%
+  dplyr::select(-c(backers))
+ksr_train_b <- ksr_train %>%
+  dplyr::select(-c(backers))
+```
+
+
+```{r}
+large_tree_b=rpart(state_bi~.-backers, data=ksr_train, method="class", model=TRUE)
+cp=which.min(large_tree_b$cptable[, "xerror"]) %>% large_tree_b$cptable[., "CP"]
+print(large_tree_b$cptable)
+tree_b=prune(large_tree_b,cp=cp)
+rpart.plot(tree_b)
+```
+```{r}
+tree_pred_b=predict(tree_b, ksr_test_b, type='class')
+tree_cmb=confusionMatrix(as.factor(tree_pred_b),as.factor(ksr_test_b$state_bi),positive='1')
+tree_cmb
+```
+
+```{r}
+set.seed(14)
+ksr_train$state_bi=as.factor(ksr_train$state_bi)
+possible_mtrys=seq(1:9)
+for (v_mtry in possible_mtrys) {
+  class_rf=randomForest(state_bi~.,data=ksr_train,ntree=500,mtry=v_mtry)
+  print(class_rf)
+}
+```
+
+```{r}
+set.seed(14)
+class_rf_bestmtry=randomForest(state_bi~.,data=ksr_train,ntree=500,mtry=9)
+plot(class_rf_bestmtry)
+legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
+#abline(v=370,col='blue')
+```
+
+
+```{r}
+class_rf=randomForest(state_bi~.,data=ksr_train,ntree=370,mtry=9,importance=TRUE)
+rf_predicts=predict(class_rf,ksr_test,type='class')
+rf_cm=confusionMatrix(as.factor(rf_predicts),as.factor(ksr_test$state_bi),positive='1')
+rf_cm
+```
+```{r}
+class_rf_impvars=varImpPlot(class_rf) 
+```
+
+
+```{r}
+set.seed(14)
+ksr_train_b$state_bi=as.factor(ksr_train_b$state_bi)
+possible_mtryss=seq(1:9)
+for (v_mtry in possible_mtryss) {
+  class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=v_mtry)}
+set.seed(14)
+class_rf_bestmtryb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=9)
+plot(class_rf_bestmtryb)
+legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
+#abline(v=370,col='blue')
+class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=370,mtry=9,importance=TRUE)
+rf_predictsb=predict(class_rfb,ksr_test_b,type='class')
+rf_cmb=confusionMatrix(as.factor(rf_predictsb),as.factor(ksr_test_b$state_bi),positive='1')
+rf_cmb
+class_rf_impvarsb=varImpPlot(class_rfb) 
+```
+
+
+## Unsupervised learning
+
+```{r}
+ks_redu_k <- ks_redu %>%
+  dplyr::select(-c(state_bi, backers))
+```
+
+
+```{r}
+ks_redu_k <- ks_redu_k %>% 
+  mutate(Duration = scale(ks_redu_k$duration)) %>%
+  mutate(Launch_year = scale(ks_redu_k$launch_year)) %>%
+  mutate(Launch_month = scale(ks_redu_k$launch_month)) %>%
+  mutate(Usd_goal_real = scale(ks_redu_k$usd_goal_real)) %>%
+  dplyr::select(-c(usd_goal_real, duration, launch_year, launch_month))
+```
+
+```{r}
+gower_dist <- daisy(ks_redu_k,
+                    metric = "gower")
+```
+
+
+```{r}
+NbClust(as.matrix(ks_redu_k), diss = NULL, distance = "euclidean",
+        min.nc = 2, max.nc = 15, method = NULL)
+```
+
+
+
