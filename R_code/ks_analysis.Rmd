@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Load usefull packages
+Load useful packages
 ```{r}
 library(tidyverse)
 library(ggplot2)
@@ -34,7 +34,9 @@ library(ggcorrplot)
 library(extrafont)
 library(pROC)
 library(cluster)
+library(clustMixType)
 library(NbClust)
+library(ClusterR)
 ```
 
 Load data
@@ -42,8 +44,8 @@ Load data
 ks_data <- read_csv("ks-projects-201801.csv")
 glimpse(ks_data)
 ```
-## Cleaning the dataset
-## Things to do:
+# Cleaning the dataset
+Things to do:
 - check NA values and remove them
 - remove useless variables
 - check for inconsistent data
@@ -108,6 +110,12 @@ mutate(launch_year = year(launched)) %>%
 mutate(launch_month = month(launched))
 ```
 
+```{r}
+ks_clean <- ks_clean %>%
+  mutate(launch_year = factor(launch_year),
+         launch_month = factor(launch_month))
+```
+
 Finally we can encode the state of the project into a binary variable and remove the previous column.
 ```{r}
 ks_clean <- ks_clean %>%
@@ -121,7 +129,7 @@ ks_clean <- ks_clean %>%
   mutate(duration = as.numeric(deadline - launched))
 ```
 
-Scaling
+Scaling to better plot some variables
 ```{r}
 ks_cleann <- ks_clean
 ks_cleann$usd_goal_real <- scaler(ks_cleann$usd_goal_real, min=0, max=1)
@@ -159,14 +167,14 @@ ks_cleann %>% dplyr::select(-name,-ID,-category,-main_category,-deadline,-launch
   ggplot(aes(x=Var1, y=Var2, fill=value)) + 
     geom_tile() +
     geom_text(aes(Var1, Var2, label = round(value, 2)), size = 3, color="black") +
-      scale_fill_gradient2(low = "lightblue", high = "navy",
+      scale_fill_gradient2(high = "#7AFA60", low = "#13A05E",
                          limit = c(-1,1), name="Correlation") +
     theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1), 
           axis.title.x = element_blank(),
           axis.title.y = element_blank(),
           panel.background = element_blank())
 ```
-As expected the amount pledged is highly correlated with the number of backers. Surely we will consider only one of the two in our analysis.
+As expected the amount pledged is highly correlated with the number of backers.
 
 ```{r}
 ks_clean <- ks_clean %>% 
@@ -174,26 +182,30 @@ ks_clean <- ks_clean %>%
   filter(!(usd_goal_real > 150000000 ))
 ```
 
+# Some plots 
+
 Let's now see some plots to better understand and visualize the data.
+Compute the average goal for category:
 ```{r}
 kickstarter_category_goal <- ks_clean %>%
   group_by(main_category) %>%
   summarise(avg_goal = mean(usd_goal_real))
 ```
 
+Plot average goal for category
 ```{r}
 kickstarter_category_goal %>%
   ggplot(aes(x= avg_goal, y = reorder(main_category, avg_goal), fill = main_category)) +
   geom_col() +
   scale_x_continuous(expand = c(0,0)) +
-  theme_fivethirtyeight() +
+  theme_clean() +
   theme(axis.title = element_text(family = "Rubik"), legend.position="none") +
   labs(
     x     = "Average Goal", 
     y     = "Category",
     title = "Average Goal for Category")
 ```
-These are the categories with the highest average goals. Let's now see the success rate for every category.
+These are the categories with the highest average goals. Let's now compute and see the success rate for every category.
 
 ```{r}
 kickstarter_category <- ks_data %>%
@@ -207,7 +219,7 @@ kickstarter_category <- ks_data %>%
 kickstarter_category %>%
   ggplot(aes(x = reorder(main_category, perc), y = perc, fill = main_category))+
   geom_col() +
-  theme_fivethirtyeight() +
+  theme_clean() +
   theme(
     axis.title = element_text(family = "Rubik"),
       legend.position="none",
@@ -226,6 +238,8 @@ kickstarter_category %>%
 
 As expected, categories with higher goals have lower success rate. The goal amount is logically a determinant variable for success.
 
+Now success rate for country.
+
 ```{r}
 ks_clean %>%
   group_by(country, state_bi) %>%
@@ -235,7 +249,7 @@ ks_clean %>%
   ggplot(aes(y= reorder(country, perc), x = perc, fill = country)) +
   geom_col() +
   scale_x_continuous(expand = c(0,0)) +
-  theme_fivethirtyeight() +
+  theme_clean() +
   theme(axis.title = element_text(family = "Rubik"), legend.position="none") +
   labs(
     x     = "Success Rate (%)", 
@@ -245,7 +259,7 @@ ks_clean %>%
 Some countries have significantly higher success rate. The country in which you choose to launch your project could me a relevant factor for success.
 
 
-## Supervised learning
+# Supervised learning
 
 Let's split the dataset in training test and test set (0.7/0.3)
 ```{r}
@@ -277,8 +291,8 @@ c_matrix
 test_roc = roc(ks_test$state_bi ~ pred1, plot = TRUE, print.auc = TRUE)
 ```
 
-The logistic model has an accuracy of 0.90. However an important consideration about "backers" must be done. Looking at the coefficients, but also just thinking about it, the numbers of backers is a key factor of the success of a project, but it is also something that we don't know before launching our crowdfunding.
-So, in order to predict if a hypothetical project would success, we should try to run a model without the "backers" variable and see how the performance changes. 
+The logistic model has an accuracy of almost 0.91. However an important consideration about "backers" must be done. Looking at the coefficients, but also just thinking about it, the numbers of backers is a key factor of the success of a project, but it is also something that we don't know before launching our crowdfunding campaign.
+So, in order to predict if a hypothetical project would success, we should try to run a model without the "backers" variable and see how the performance changes. From now on we will consider both cases in our analysis. 
 
 ```{r}
 log_model_b <- glm(state_bi ~ main_category + usd_goal_real + duration + launch_year + launch_month + country, family = "binomial", data = ks_train)
@@ -297,17 +311,21 @@ Now the accuracy is 0.65, much less than before but still acceptable. That shows
 For computational reasons, let's create a reduced dataset of 10k observations and split it in training and validation sets.
 
 ```{r}
+set.seed(777)
 ks_redu <- ks_clean[sample(nrow(ks_clean), 10000), ]
 ks_redu <- ks_redu %>%
   dplyr::select(- c(ID, name,category,deadline,launched, usd_pledged_real))
-set.seed(777)
 
 sample <- sample(c(TRUE, FALSE), nrow(ks_redu), replace=TRUE, prob=c(0.7,0.3))
 ksr_train  <- ks_redu[sample, ]
 ksr_test   <- ks_redu[!sample, ]
 ```
 
+The logistic regression is good, but we have a lot of variables, especially categorical ones, so let's try the lasso to see if some of them are not relevant and if the utout is more interpretable.
+
 Lasso
+
+Tuning best lambda
 ```{r}
 y_train=ksr_train$state_bi
 ksr_trainx <- ksr_train %>%
@@ -332,8 +350,36 @@ lasso_pred=ifelse(lasso_prob>0.5,1,0)
 lasso_cm=confusionMatrix(as.factor(lasso_pred),as.factor(ksr_test$state_bi),positive='1')
 print(lasso_cm)
 ```
+The lasso accuracy is slightly better than the logistic but just a few coefficients are shrunk to 0. Not exactly what I was expecting.
 
-Tree
+Let's see what happend without the backers variable.
+```{r}
+y_train=ksr_train$state_bi
+ksr_trainx <- ksr_train %>%
+  dplyr::select(-c(state_bi, backers))
+x_train=model.matrix( ~ ., ksr_trainx[,])
+cv.lasso=cv.glmnet(x_train,y_train,alpha=1,family="binomial")
+plot(cv.lasso)
+print(cv.lasso$lambda.min)
+```
+
+```{r}
+lasso=glmnet(x_train,y_train,alpha=1,family="binomial",lambda=cv.lasso$lambda.min)
+coef(lasso)
+```
+```{r}
+ksr_testx <- ksr_test %>%
+  dplyr::select(-c(backers, state_bi))
+x_test=model.matrix( ~ .,ksr_testx[,])
+lasso_prob=predict(lasso,x_test,type='response')
+lasso_pred=ifelse(lasso_prob>0.5,1,0)
+lasso_cm=confusionMatrix(as.factor(lasso_pred),as.factor(ksr_test$state_bi),positive='1')
+print(lasso_cm)
+```
+The accuracy is around 0.66, slightly better than the logistic regression, but without an actual selection of the features.
+
+
+Let's see how the Tree classifier performs
 ```{r}
 large_tree=rpart(state_bi~., data=ksr_train, method="class", model=TRUE)
 cp=which.min(large_tree$cptable[, "xerror"]) %>% large_tree$cptable[., "CP"]
@@ -347,6 +393,11 @@ tree_pred=predict(tree, ksr_test, type='class')
 tree_cm=confusionMatrix(as.factor(tree_pred),as.factor(ksr_test$state_bi),positive='1')
 tree_cm
 ```
+
+The accuracy is almost 0.91 and the tree is very easy to interpret. It considers only the two variables "backers" and "goal" in its partitions, showing how much important they are, but at the same time reducing the real complexity of the problem. For these reasons it's a good model to visualize and interpret, but I would prefer a more "complex" one.
+
+
+Let's see without backers.
 ```{r}
 ksr_test_b <- ksr_test %>%
   dplyr::select(-c(backers))
@@ -363,13 +414,18 @@ tree_b=prune(large_tree_b,cp=cp)
 rpart.plot(tree_b)
 ```
 ```{r}
-tree_pred_b=predict(tree_b, ksr_test_b, type='class')
+tree_pred_b=predict(tree_b, ksr_test, type='class')
 tree_cmb=confusionMatrix(as.factor(tree_pred_b),as.factor(ksr_test_b$state_bi),positive='1')
 tree_cmb
 ```
+This time the accuracy is the highest among all the models (0.67) and the tree is very "good looking" and considers a lot of variables.
+ 
+ 
+Random Forest
 
+mtry
 ```{r}
-set.seed(14)
+set.seed(777)
 ksr_train$state_bi=as.factor(ksr_train$state_bi)
 possible_mtrys=seq(1:9)
 for (v_mtry in possible_mtrys) {
@@ -377,73 +433,177 @@ for (v_mtry in possible_mtrys) {
   print(class_rf)
 }
 ```
-
+number of trees
 ```{r}
-set.seed(14)
+set.seed(777)
 class_rf_bestmtry=randomForest(state_bi~.,data=ksr_train,ntree=500,mtry=9)
 plot(class_rf_bestmtry)
 legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
-#abline(v=370,col='blue')
 ```
 
-
+Model and accuracy
 ```{r}
-class_rf=randomForest(state_bi~.,data=ksr_train,ntree=370,mtry=9,importance=TRUE)
+class_rf=randomForest(state_bi~.,data=ksr_train,ntree=300,mtry=9,importance=TRUE)
 rf_predicts=predict(class_rf,ksr_test,type='class')
 rf_cm=confusionMatrix(as.factor(rf_predicts),as.factor(ksr_test$state_bi),positive='1')
 rf_cm
 ```
+The accuracy of the model is the highest among the ones with "backers": 0.92.
+
+
+Let's see the most important variables
 ```{r}
 class_rf_impvars=varImpPlot(class_rf) 
 ```
+As expected backers and goal are the most important.
 
-
+Random forest without backers.
 ```{r}
-set.seed(14)
+set.seed(777)
 ksr_train_b$state_bi=as.factor(ksr_train_b$state_bi)
 possible_mtryss=seq(1:9)
 for (v_mtry in possible_mtryss) {
   class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=v_mtry)}
-set.seed(14)
+set.seed(777)
 class_rf_bestmtryb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=9)
 plot(class_rf_bestmtryb)
 legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
-#abline(v=370,col='blue')
-class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=370,mtry=9,importance=TRUE)
+class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=100,mtry=9,importance=TRUE)
 rf_predictsb=predict(class_rfb,ksr_test_b,type='class')
 rf_cmb=confusionMatrix(as.factor(rf_predictsb),as.factor(ksr_test_b$state_bi),positive='1')
 rf_cmb
 class_rf_impvarsb=varImpPlot(class_rfb) 
 ```
+Without the backers variables the accuracy is 0.63, surprisingly lower than any other model.
+
+
+
 
 
 ## Unsupervised learning
 
-```{r}
-ks_redu_k <- ks_redu %>%
-  dplyr::select(-c(state_bi, backers))
-```
+Let's see if we can cluster our observations using the most important variables and maybe obtain the right classification for successful and failed projects.
 
-
+We are going to use a smaller dataset for computation and visualisation reasons.
 ```{r}
-ks_redu_k <- ks_redu_k %>% 
-  mutate(Duration = scale(ks_redu_k$duration)) %>%
-  mutate(Launch_year = scale(ks_redu_k$launch_year)) %>%
-  mutate(Launch_month = scale(ks_redu_k$launch_month)) %>%
-  mutate(Usd_goal_real = scale(ks_redu_k$usd_goal_real)) %>%
-  dplyr::select(-c(usd_goal_real, duration, launch_year, launch_month))
+set.seed(777)
+ks_redus <- ks_clean[sample(nrow(ks_clean), 1000), ]
+ks_reduk <- ks_redus
+ks_reduk <- ks_reduk %>%
+  dplyr::select(- c(ID, name,category, main_category, duration, country, launch_year, launch_month, deadline, launched, usd_pledged_real, state_bi))
 ```
 
 ```{r}
-gower_dist <- daisy(ks_redu_k,
-                    metric = "gower")
+ks_reduk <- as.data.frame(scale(ks_reduk))
 ```
 
+Let's scale backers and goal.
+```{r}
+ks_redus$backers <- scale(ks_redus$backers)
+ks_redus$usd_goal_real <- scale(ks_redus$usd_goal_real)
+```
+
+See the distribution and remove some outliers to obtain better clusters.
+```{r}
+ks_reduk %>% gather() %>% 
+  ggplot(aes(value)) + 
+    geom_boxplot(fill="skyblue", color="black", outlier.colour = "deepskyblue") + 
+    facet_wrap(~key, scales = 'free')+
+  theme_minimal()
+```
+```{r}
+ks_reduk <- ks_reduk %>%
+  filter(!(backers > 4))%>%
+  filter(!(usd_goal_real > 4))
+```
+```{r}
+ks_redus <- ks_redus %>%
+  filter(!(backers > 4))%>%
+  filter(!(usd_goal_real > 4))
+```
+Compute distance matrix
+```{r}
+dist <- dist(ks_reduk)
+```
+
+Best number of cluster even if we are going to use K=2 (to see if it will cluster failed and succesful projects)
+```{r}
+fviz_nbclust(ks_reduk, kmeans, method = "wss")
+```
+
+K-means
+```{r}
+set.seed(777)
+km <- kmeans(ks_reduk, centers = 2, nstart = 50)
+km
+```
+Plot
+```{r}
+km.clusters <- km$cluster
+rownames(ks_reduk) <- paste(ks_redus$state_bi, 1:dim(ks_redus)[1], sep="_")
+fviz_cluster(list(data=ks_reduk, cluster = km.clusters))
+```
+
+See how many observations are "classified" correctly
+```{r}
+table(km.clusters, ks_redus$state_bi)
+```
+Very poor performance: k-means with just backers and goal is not sufficient to cluster projects based on their state.
+This is also probably due to the fact that there are projects with a lot of backers but a very small goal and viceversa. 
+
+Let's try again but including also the duration of the campaign.
+```{r}
+set.seed(777)
+ks_redus <- ks_clean[sample(nrow(ks_clean), 1000), ]
+ks_reduk <- ks_redus
+ks_reduk <- ks_reduk %>%
+  dplyr::select(- c(ID, name,category, main_category, country, launch_year, launch_month, deadline, launched, usd_pledged_real, state_bi))
+```
 
 ```{r}
-NbClust(as.matrix(ks_redu_k), diss = NULL, distance = "euclidean",
-        min.nc = 2, max.nc = 15, method = NULL)
+ks_reduk <- as.data.frame(scale(ks_reduk))
+```
+```{r}
+ks_redus$backers <- scale(ks_redus$backers)
+ks_redus$usd_goal_real <- scale(ks_redus$usd_goal_real)
+ks_redus$duration <- scale(ks_redus$duration)
 ```
 
+```{r}
+ks_reduk %>% gather() %>% 
+  ggplot(aes(value)) + 
+    geom_boxplot(fill="skyblue", color="black", outlier.colour = "deepskyblue") + 
+    facet_wrap(~key, scales = 'free')+
+  theme_minimal()
+```
 
+```{r}
+ks_reduk <- ks_reduk %>%
+  filter(!(backers > 3))%>%
+  filter(!(usd_goal_real > 3))
+```
+```{r}
+ks_redus <- ks_redus %>%
+  filter(!(backers > 3))%>%
+  filter(!(usd_goal_real > 3))
+```
+
+```{r}
+set.seed(777)
+kmd <- kmeans(ks_reduk, centers = 2, nstart = 50)
+kmd
+```
+
+```{r}
+kmd.clusters <- kmd$cluster
+rownames(ks_reduk) <- paste(ks_redus$state_bi, 1:dim(ks_redus)[1], sep="_")
+fviz_cluster(list(data=ks_reduk, cluster = kmd.clusters))
+```
+
+```{r}
+table(kmd.clusters, ks_redus$state_bi)
+```
+Slightly better performance, but still very unprecise.
+
+In conclusion clustering is not able to "catch" the state of a project based on some of its features.
 
