@@ -34,7 +34,6 @@ library(ggcorrplot)
 library(extrafont)
 library(pROC)
 library(cluster)
-library(clustMixType)
 library(NbClust)
 library(ClusterR)
 ```
@@ -427,7 +426,7 @@ mtry
 ```{r}
 set.seed(777)
 ksr_train$state_bi=as.factor(ksr_train$state_bi)
-possible_mtrys=seq(1:9)
+possible_mtrys=seq(1:8)
 for (v_mtry in possible_mtrys) {
   class_rf=randomForest(state_bi~.,data=ksr_train,ntree=500,mtry=v_mtry)
   print(class_rf)
@@ -436,14 +435,14 @@ for (v_mtry in possible_mtrys) {
 number of trees
 ```{r}
 set.seed(777)
-class_rf_bestmtry=randomForest(state_bi~.,data=ksr_train,ntree=500,mtry=9)
+class_rf_bestmtry=randomForest(state_bi~.,data=ksr_train,ntree=500,mtry=4)
 plot(class_rf_bestmtry)
 legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
 ```
 
 Model and accuracy
 ```{r}
-class_rf=randomForest(state_bi~.,data=ksr_train,ntree=300,mtry=9,importance=TRUE)
+class_rf=randomForest(state_bi~.,data=ksr_train,ntree=300,mtry=4,importance=TRUE)
 rf_predicts=predict(class_rf,ksr_test,type='class')
 rf_cm=confusionMatrix(as.factor(rf_predicts),as.factor(ksr_test$state_bi),positive='1')
 rf_cm
@@ -461,20 +460,24 @@ Random forest without backers.
 ```{r}
 set.seed(777)
 ksr_train_b$state_bi=as.factor(ksr_train_b$state_bi)
-possible_mtryss=seq(1:9)
-for (v_mtry in possible_mtryss) {
-  class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=v_mtry)}
+possible_mtrysss=seq(1:8)
+for (v_mtry in possible_mtrysss) {
+  class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=v_mtry)
+  print(class_rfb)}
+```
+```{r}
 set.seed(777)
-class_rf_bestmtryb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=9)
+class_rf_bestmtryb=randomForest(state_bi~.,data=ksr_train_b,ntree=500,mtry=1)
 plot(class_rf_bestmtryb)
 legend(x="topright",box.col="black",bg="white",box.lwd=2,title="err.rate",legend=c("OOB","0","1"),fill=c("black","red","green"))
-class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=100,mtry=9,importance=TRUE)
+class_rfb=randomForest(state_bi~.,data=ksr_train_b,ntree=200,mtry=1,importance=TRUE)
 rf_predictsb=predict(class_rfb,ksr_test_b,type='class')
 rf_cmb=confusionMatrix(as.factor(rf_predictsb),as.factor(ksr_test_b$state_bi),positive='1')
 rf_cmb
 class_rf_impvarsb=varImpPlot(class_rfb) 
 ```
-Without the backers variables the accuracy is 0.63, surprisingly lower than any other model.
+Without the backers variables the accuracy is 0.67, slightly better than the single tree.
+Anyway the tree is easier to visualize and interpret.
 
 
 
